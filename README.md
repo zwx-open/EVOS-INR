@@ -148,12 +148,12 @@ We thank the authors of the following works for releasing their codebases:
 # Additional Related Research
 Welcome to explore our related research. The source code for all works has been available.
 - (*AAAI'2025*) Enhancing Implicit Neural Representations via Symmetric Power Transformation | 
-[[paper]](https://arxiv.org/abs/2412.09213)
-[[project]](https://weixiang-zhang.github.io/proj-symtrans/)
-[[code]](https://github.com/zwx-open/Symmetric-Power-Transformation-INR)
+[[paper]](https://arxiv.org/abs/2412.09213) | 
+[[project]](https://weixiang-zhang.github.io/proj-symtrans/) | 
+[[code]](https://github.com/zwx-open/Symmetric-Power-Transformation-INR) | 
 - (*ICME'2025*) Expansive Supervision for Neural Radiance Fields| 
-[[paper]](https://arxiv.org/pdf/2412.10153)
-[[code]](https://github.com/zwx-open/Expansive-Supervision)
+[[paper]](https://arxiv.org/pdf/2412.10153) | 
+[[code]](https://github.com/zwx-open/Expansive-Supervision) | 
 - Recent Progress of Implicit Neural Representations | 
 [[code]](https://github.com/zwx-open/Recent-Progress-of-INR)
 
