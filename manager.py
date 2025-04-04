@@ -24,7 +24,6 @@ class ParamManager(object):
         self.p.model_type = "siren"
         self.p.input_path = DEMO_IMG
         self.p.eval_lpips = STORE_TRUE
-        self.p.warm_up = 0
 
     def _set_exp(self, idx=0, exp_num="000"):
         self._set_default_parmas()
@@ -98,26 +97,9 @@ class ParamManager(object):
         self._tag += f"_{type}"
 
 
-    def _set_fm_final2(self):
-        self.p.strategy = "freeze"
-        # profile
-        self.p.profile_interval_method = "lin_dec"
-        # self.p.init_interval = 75
-        self.p.init_interval = 100
-        self.p.end_interval = 50
-        # crossover
-        self.p.lap_coff = 1e-5
-        self.p.crossover_method = "select"
-        # mutation
-        self.p.mutation_method = "constant"
-        self.p.init_mutation_ratio = 0.5
-        # self.p.init_mutation_ratio = 0.6
-        # self.p.end_mutation_ratio = 0.4
-
-
     def _set_exp_001(self, _exp):
         use_ratio = 0.5
-        self._tag = f"001_val_table1_constant_{use_ratio}"
+        self._tag = f"001_table1_constant_{use_ratio}"
         self._exp = f"{_exp}"
 
         self.p.log_epoch = 500 
@@ -130,7 +112,7 @@ class ParamManager(object):
         self._by_sampler(_exp)
     
     def _set_exp_002(self, _exp):
-        use_ratio = 0.2 # intial ratio
+        use_ratio = 0.2 
         self._set_exp_001(_exp)
         self.p.use_ratio = use_ratio
         self.p.sample_num_schedular = "step" 
@@ -145,95 +127,33 @@ class ParamManager(object):
 
         elif _exp == "random":
             self.p.strategy = "random"
+        
+        elif _exp == "expansive":
+            self.p.strategy = "expansive"
+        
+        elif _exp == "egra":
+            self.p.strategy = "egra"
 
-        elif _exp == "fm_cur":
-            self._set_fm_final()
-        
-        elif _exp == "fm_cur2":
-            self._set_fm_final2()
-        
-        elif _exp == "fm_cur2_step":
-            self._set_fm_final2()
-            self.p.use_ratio = 0.2
-            self.p.sample_num_schedular = "step"
-        
-        elif _exp == "fm_cur2_wo_crossover_laploss":
-            self._set_fm_final2()
+        elif _exp == "evos":
+            self.p.strategy = "evos"
+
+        elif _exp == "evos_wo_cfs":
+            self.p.strategy = "evos"
             self.p.lap_coff = 0
 
-        elif _exp == "fm_cur_fix_mutation":
-            self._set_fm_final()
-            self.p.mutation_method = "constant"
-            self.p.init_mutation_ratio = 0.6
-
-        elif _exp == "fm_cur_fix_profile":
-            self._set_fm_final()
-            self.p.profile_interval_method = "fixed"
-            self.p.init_interval = 75
-        
-        elif _exp.startswith("fm_cur2_fix_profile"):
-            interval = _exp.split("_")[-1]
-            self._set_fm_final2()
-            self.p.profile_interval_method = "fixed"
-            self.p.init_interval = interval
-
-        elif _exp == "fm_cur_wo_crossover_all":
-            self._set_fm_final()
-            self.p.lap_coff = 0
-            self.p.crossover_method = "no"
-
-        elif _exp == "fm_cur_wo_crossover_laploss":
-            self._set_fm_final()
-            self.p.lap_coff = 0
-
-        elif _exp == "fm_cur_wo_crossover_add":
-            self._set_fm_final()
-            self.p.crossover_method = "no"
-
-        elif _exp == "fm_cur_wo_mutation":
-            self._set_fm_final()
-            self.p.mutation_method = "constant"
-            self.p.init_mutation_ratio = 0
-        
-        elif _exp.startswith("fm_cur2_fix_mutation"):
-            ratio = _exp.split("_")[-1]
-            self._set_fm_final2()
-            self.p.mutation_method = "constant"
-            self.p.init_mutation_ratio = ratio
-
-        elif _exp == "fm_cur_wo_profile":
-            self._set_fm_final()
-            self.p.profile_interval_method = "fixed"
-            self.p.init_interval = self.p.num_epochs
-
-        elif _exp == "fm_cur_dense_profile":
-            self._set_fm_final()
-            self.p.profile_interval_method = "fixed"
-            self.p.init_interval = 2
-
-        # nmt
+        # int
         elif _exp == "nmt_incre":
             self.p.strategy = "nmt"
             self.p.nmt_profile_strategy = "incremental"
-        elif _exp == "nmt_incre_step":
-            self.p.strategy = "nmt"
-            self.p.nmt_profile_strategy = "incremental"
-            self.p.use_ratio = 0.2
-            self.p.sample_num_schedular = "step"
-
-        elif _exp == "nmt_dense2":
-            self.p.strategy = "nmt"
-            self.p.nmt_profile_strategy = "dense2"
+        
         elif _exp == "nmt_dense":
             self.p.strategy = "nmt"
             self.p.nmt_profile_strategy = "dense"
 
-        elif _exp == "nmt_dense_step":
+        elif _exp == "nmt_dense2":
             self.p.strategy = "nmt"
-            self.p.nmt_profile_strategy = "dense"
-            self.p.use_ratio = 0.2
-            self.p.sample_num_schedular = "step"
-        
+            self.p.nmt_profile_strategy = "dense2"
+
         elif _exp == "nmt_rev_incre":
             self.p.strategy = "nmt"
             self.p.nmt_profile_strategy = "reverse-incremental"
@@ -258,11 +178,6 @@ class ParamManager(object):
             self.p.strategy = "soft"
             self.p.soft_raw =  STORE_TRUE
 
-        # expansive supervision
-        elif _exp == "expansive":
-            self.p.strategy = "expansive"
         
-        elif _exp == "egra":
-            self.p.strategy = "egra"
 
      

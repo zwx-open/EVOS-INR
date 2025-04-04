@@ -190,7 +190,7 @@ class Opt(object):
         self.parser.add_argument(
             "--strategy",
             type=str,
-            choices=["full", "random", "freeze", "nmt", "soft", "expansive", "egra", "evos"],
+            choices=["full", "random", "nmt", "soft", "expansive", "egra", "evos"],
             default="full"
         )
 
@@ -205,8 +205,6 @@ class Opt(object):
         # random & nmt & soft & our  → all strategies
         self.parser.add_argument("--use_ratio", type=float, default=0.5,help="it is also the init ratio of pixel ratio strategy")
 
-        # freeze
-        self.parser.add_argument("--warm_up", type=int, default=50)
 
         self.parser.add_argument("--profile_guide", type=str, default="value", choices=["value", "diff_1"])
 
@@ -268,11 +266,11 @@ class Opt(object):
         self.parser.add_argument(
             "--crossover_method",
             type=str,
-            default="no",
+            default="select",
             choices=[
                 "no",
                 "add",
-                "select" ### new try  根据spectral bias选择样本
+                "select"
             ],
         )
         
@@ -280,8 +278,7 @@ class Opt(object):
         self.parser.add_argument(
             "--lap_coff",
             type=float,
-            default=0,
-            help="laplacian_loss_coff, 1e-5 achieve best",
+            default=1e-5,
         )
 
         self.parser.add_argument(
@@ -336,18 +333,18 @@ class Opt(object):
         self.parser.add_argument(
             "--profile_interval_method",
             type=str,
-            default="fixed",
+            default="lin_dec",
             help="pim",
             choices=[
                 "fixed",
-                "lin_dec" # linear decrease
+                "lin_dec" 
             ],
         )
 
         self.parser.add_argument(
             "--init_interval",
             type=int,
-            default=50,
+            default=100,
         )
         self.parser.add_argument(
             "--end_interval",

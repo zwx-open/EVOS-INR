@@ -16,7 +16,6 @@ from components.expansive import ExpansiveSupervision as ES
 from components.egra import EGRA
 
 import numpy as np
-import imageio.v2 as imageio
 import torch
 import torch.nn.functional as F
 
@@ -30,6 +29,17 @@ class Sampler(object):
         self.use_ratio_scheduler = mt_scheduler_factory(self.args.sample_num_schedular)
         self.book = {}
 
+    def _reset_rng(self):
+        generator = torch.Generator()
+        seed = generator.seed()
+
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    def _recover_rng(self):
+        fix_seed(self.args.seed)
+    
     def _init_sampler(self):
         
         if self.args.strategy == "nmt":
@@ -47,10 +57,10 @@ class Sampler(object):
         elif self.args.strategy == "egra":
             # Egra-nerf: Edge-guided ray allocation for neural radiance fields.
             self._egra_init()
+    
+        elif self.args.strategy == "evos":
+            self._evos_init()
         
-        if self.args.lap_coff > 0 or self.args.crossover_method != "no":
-            self.cached_gt_lap = compute_laplacian(self.input_img).squeeze()
-
     def _nmt_init(self):
         self.nmt = NMT(
             self.model,
@@ -96,16 +106,9 @@ class Sampler(object):
     def _egra_init(self):
         self.egra = EGRA(img=self.input_img)
 
-    def _reset_rng(self):
-        generator = torch.Generator()
-        seed = generator.seed()
-
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-
-    def _recover_rng(self):
-        fix_seed(self.args.seed)
+    def _evos_init(self):
+        if self.args.lap_coff > 0 or self.args.crossover_method != "no":
+            self.cached_gt_lap = compute_laplacian(self.input_img).squeeze()
 
     def _get_cur_use_ratio(self, epoch):
         return self.use_ratio_scheduler(
@@ -130,11 +133,11 @@ class Sampler(object):
             _gt = self.full_gt[indices]
             return _coords, _gt
 
-        elif _st == "freeze":
-            if self._should_fitness_eval(epoch):
+        elif _st == "evos":
+            if self._evos_is_fitness_eval_iter(epoch):
                 return coords, gt
             else:
-                selection_mask = self._get_selection_mask(epoch)
+                selection_mask = self._evos_get_selection_mask(epoch)
                 _coords = self.full_coords[selection_mask]
                 _gt = self.full_gt[selection_mask]
                 return _coords, _gt
@@ -186,155 +189,14 @@ class Sampler(object):
         self._recover_rng()
         return _coords, _gt
 
-    def _get_mutation_ratio(self, epoch):
-        if self.args.mutation_method == "constant":
-            return self.args.init_mutation_ratio * self.args.use_ratio
-        elif self.args.mutation_method == "linear":
-            _start = self.args.init_mutation_ratio
-            _end = self.args.end_mutation_ratio  # max = 1
-            ratio = _start + ((_end - _start) / self.args.num_epochs) * epoch
-            return ratio * self.args.use_ratio
-        elif self.args.mutation_method == "exp":
-            _start = self.args.init_mutation_ratio
-            _end = self.args.end_mutation_ratio
-            _lamda = -np.log(_end / _start) / self.args.num_epochs
-            ratio = _start * np.exp(-_lamda * epoch)
-            return ratio * self.args.use_ratio
-        else:
-            raise NotImplementedError
-
-    def _get_selection_mask(self, epoch):
-        mutation_ratio = self._get_mutation_ratio(epoch)
-        first_select_ratio = self.cur_use_ratio - mutation_ratio
-        first_select_num = int(first_select_ratio * self.sample_num)
-
-        sorted_map_index = self.book["sorted_map_index"]
-        first_select_indices = sorted_map_index[-first_select_num:]
-
-        # Augmented Unbiased Mutation
-        mutation_num = int(mutation_ratio * self.sample_num)
-        remain_indices = sorted_map_index[:-first_select_num]
-        sample_index = torch.randperm(remain_indices.shape[0], device=self.device)[
-            :mutation_num
-        ]
-        mutation_indicies = remain_indices[sample_index]
-
-        selected_indices = torch.cat([first_select_indices, mutation_indicies])
-
-        _mask = torch.ones(self.sample_num, dtype=torch.bool, device=self.device)
-        _mask[selected_indices] = False
-        self.book["freeze_mask"] = _mask
-
-        selection_mask = torch.zeros(
-            self.sample_num, dtype=torch.bool, device=self.device
-        )
-        selection_mask[selected_indices] = True
-        return selection_mask
-
-    def _should_fitness_eval(self, epoch):
-        _cur_interval = self._get_cur_interval(epoch)
-        return epoch % _cur_interval == 1
-
-    def _get_cur_interval(self, epoch):
-        if self.args.profile_interval_method == "fixed":
-            return self.args.init_interval
-        elif self.args.profile_interval_method == "lin_dec":
-            _start = self.args.init_interval
-            _end = self.args.end_interval
-            _cur_interval = _start + ((_end - _start) / self.args.num_epochs) * epoch
-            return int(_cur_interval)
-
-    def _frequency_aware_crossover(self, pred, gt, epoch): # crossover
-        error_map = F.mse_loss(pred, gt, reduction="none").mean(1)
-        if self.args.crossover_method == "add":
-            r_img = self.reconstruct_img(pred)
-            laplace_map = F.mse_loss(
-                compute_laplacian(r_img).squeeze(), self.cached_gt_lap, reduction="none"
-            )
-            cross_lap_coff = self.args.lap_coff if self.args.lap_coff > 0 else 1e-5
-            error_map = error_map + cross_lap_coff * laplace_map.flatten()
-        elif self.args.crossover_method == "no":
-            pass
-
-        if self.args.profile_guide == "value":
-            sorted_map_index = torch.argsort(error_map.flatten())
-        elif self.args.profile_guide == "diff_1":
-            # to deprecated ...
-            last_error_map = self.book.get("error_map", None)
-            if last_error_map is None:
-                last_error_map = torch.zeros_like(error_map)
-            guidance_map = torch.abs(error_map - last_error_map)
-            sorted_map_index = torch.argsort(guidance_map.flatten())
-        else:
-            raise NotImplementedError
-
-        self.book["freeze_profile_pred"] = pred.detach()
-        self.book["error_map"] = error_map.detach()
-        self.book["sorted_map_index"] = sorted_map_index
-
-        if self.args.crossover_method == "select":
-            r_img = self.reconstruct_img(pred)
-            laplace_map = F.mse_loss(
-                compute_laplacian(r_img).squeeze(), self.cached_gt_lap, reduction="none"
-            )
-            cross_lap_coff = self.args.lap_coff if self.args.lap_coff > 0 else 1e-5
-            laplace_error_map = cross_lap_coff * laplace_map.flatten()
-            sorted_lap_map_index = torch.argsort(laplace_error_map.flatten())
-            self.book["sorted_lap_map_index"] = sorted_lap_map_index
-
-            mutation_ratio = self._get_mutation_ratio(epoch)
-            freeze_ratio = 1 - self.cur_use_ratio + mutation_ratio
-
-            freezed_num = int(freeze_ratio * self.sample_num)
-            selected_num = self.sample_num - freezed_num
-
-            l2_error_selected_index = sorted_map_index[-selected_num:]
-            lap_error_selected_index = sorted_lap_map_index[-selected_num:]
-            isin = torch.isin(l2_error_selected_index, lap_error_selected_index)
-
-            selected_index = l2_error_selected_index[isin]
-
-            remain_num = selected_num - selected_index.shape[0]
-            l2_remain_index = l2_error_selected_index[~isin]
-            isin2 = torch.isin(lap_error_selected_index, l2_error_selected_index)
-            lap_remain_index = lap_error_selected_index[~isin2]
-
-            l2_remain_num = int(
-                remain_num
-                * (error_map.mean() / (laplace_error_map.mean() + error_map.mean()))
-            )
-            l2_remain_num = min(l2_remain_num, l2_remain_index.shape[0])
-            lap_remain_num = remain_num - l2_remain_num
-            all_selected_index = torch.cat(
-                [
-                    lap_remain_index[-lap_remain_num:],
-                    l2_remain_index[-l2_remain_num:],
-                    selected_index,
-                ]
-            )
-            all_remain_index = sorted_map_index[
-                ~torch.isin(sorted_map_index, all_selected_index)
-            ]
-            select_sorted_index = torch.cat([all_remain_index, all_selected_index])
-            self.book["sorted_map_index"] = select_sorted_index
-
-    def _cross_frequency_loss(self, cur_loss, pred):
-        if self.args.lap_coff > 0:
-            r_img = self.reconstruct_img(pred)
-            lap_loss = F.mse_loss(
-                compute_laplacian(r_img).squeeze(), self.cached_gt_lap
-            )
-            cur_loss += self.args.lap_coff * lap_loss
-        return cur_loss
-    
     def _sampler_compute_loss(self, pred, gt, epoch):
         _st = self.args.strategy
         mse = self.compute_mse(pred, gt)
-        if _st == "freeze":
-            if self._should_fitness_eval(epoch):
+        if _st == "evos":
+            if self._evos_is_fitness_eval_iter(epoch):
 
-                self._frequency_aware_crossover(pred, gt, epoch) # crossover
-                return self._cross_frequency_loss(mse, pred)
+                self._evos_frequency_aware_crossover(pred, gt, epoch) # crossover
+                return self._evos_cross_frequency_loss(mse, pred)
             else:
                 if self.args.lap_coff <= 0 or epoch > self.args.use_laplace_epoch:
                     return mse
@@ -404,6 +266,148 @@ class Sampler(object):
                 )
                 self.book["soft_net_grad"] = net_grad
 
+    def _evos_get_mutation_ratio(self, epoch):
+        if self.args.mutation_method == "constant":
+            return self.args.init_mutation_ratio * self.args.use_ratio
+        elif self.args.mutation_method == "linear":
+            _start = self.args.init_mutation_ratio
+            _end = self.args.end_mutation_ratio  # max = 1
+            ratio = _start + ((_end - _start) / self.args.num_epochs) * epoch
+            return ratio * self.args.use_ratio
+        elif self.args.mutation_method == "exp":
+            _start = self.args.init_mutation_ratio
+            _end = self.args.end_mutation_ratio
+            _lamda = -np.log(_end / _start) / self.args.num_epochs
+            ratio = _start * np.exp(-_lamda * epoch)
+            return ratio * self.args.use_ratio
+        else:
+            raise NotImplementedError
+
+    def _evos_get_selection_mask(self, epoch):
+        mutation_ratio = self._evos_get_mutation_ratio(epoch)
+        first_select_ratio = self.cur_use_ratio - mutation_ratio
+        first_select_num = int(first_select_ratio * self.sample_num)
+
+        sorted_map_index = self.book["sorted_map_index"]
+        first_select_indices = sorted_map_index[-first_select_num:]
+
+        # Augmented Unbiased Mutation
+        mutation_num = int(mutation_ratio * self.sample_num)
+        remain_indices = sorted_map_index[:-first_select_num]
+        sample_index = torch.randperm(remain_indices.shape[0], device=self.device)[
+            :mutation_num
+        ]
+        mutation_indicies = remain_indices[sample_index]
+
+        selected_indices = torch.cat([first_select_indices, mutation_indicies])
+
+        _mask = torch.ones(self.sample_num, dtype=torch.bool, device=self.device)
+        _mask[selected_indices] = False
+        self.book["freeze_mask"] = _mask
+
+        selection_mask = torch.zeros(
+            self.sample_num, dtype=torch.bool, device=self.device
+        )
+        selection_mask[selected_indices] = True
+        return selection_mask
+
+    def _evos_is_fitness_eval_iter(self, epoch):
+        _cur_interval = self._evos_get_cur_interval(epoch)
+        return epoch % _cur_interval == 1
+
+    def _evos_get_cur_interval(self, epoch):
+        if self.args.profile_interval_method == "fixed":
+            return self.args.init_interval
+        elif self.args.profile_interval_method == "lin_dec":
+            _start = self.args.init_interval
+            _end = self.args.end_interval
+            _cur_interval = _start + ((_end - _start) / self.args.num_epochs) * epoch
+            return int(_cur_interval)
+
+    def _evos_frequency_aware_crossover(self, pred, gt, epoch): 
+        error_map = F.mse_loss(pred, gt, reduction="none").mean(1)
+        if self.args.crossover_method == "add":
+            r_img = self.reconstruct_img(pred)
+            laplace_map = F.mse_loss(
+                compute_laplacian(r_img).squeeze(), self.cached_gt_lap, reduction="none"
+            )
+            cross_lap_coff = self.args.lap_coff if self.args.lap_coff > 0 else 1e-5
+            error_map = error_map + cross_lap_coff * laplace_map.flatten()
+        elif self.args.crossover_method == "no":
+            pass
+
+        if self.args.profile_guide == "value":
+            sorted_map_index = torch.argsort(error_map.flatten())
+        elif self.args.profile_guide == "diff_1":
+            # to deprecated ...
+            last_error_map = self.book.get("error_map", None)
+            if last_error_map is None:
+                last_error_map = torch.zeros_like(error_map)
+            guidance_map = torch.abs(error_map - last_error_map)
+            sorted_map_index = torch.argsort(guidance_map.flatten())
+        else:
+            raise NotImplementedError
+
+        self.book["freeze_profile_pred"] = pred.detach()
+        self.book["error_map"] = error_map.detach()
+        self.book["sorted_map_index"] = sorted_map_index
+
+        if self.args.crossover_method == "select":
+            r_img = self.reconstruct_img(pred)
+            laplace_map = F.mse_loss(
+                compute_laplacian(r_img).squeeze(), self.cached_gt_lap, reduction="none"
+            )
+            cross_lap_coff = self.args.lap_coff if self.args.lap_coff > 0 else 1e-5
+            laplace_error_map = cross_lap_coff * laplace_map.flatten()
+            sorted_lap_map_index = torch.argsort(laplace_error_map.flatten())
+            self.book["sorted_lap_map_index"] = sorted_lap_map_index
+
+            mutation_ratio = self._evos_get_mutation_ratio(epoch)
+            freeze_ratio = 1 - self.cur_use_ratio + mutation_ratio
+
+            freezed_num = int(freeze_ratio * self.sample_num)
+            selected_num = self.sample_num - freezed_num
+
+            l2_error_selected_index = sorted_map_index[-selected_num:]
+            lap_error_selected_index = sorted_lap_map_index[-selected_num:]
+            isin = torch.isin(l2_error_selected_index, lap_error_selected_index)
+
+            selected_index = l2_error_selected_index[isin]
+
+            remain_num = selected_num - selected_index.shape[0]
+            l2_remain_index = l2_error_selected_index[~isin]
+            isin2 = torch.isin(lap_error_selected_index, l2_error_selected_index)
+            lap_remain_index = lap_error_selected_index[~isin2]
+
+            l2_remain_num = int(
+                remain_num
+                * (error_map.mean() / (laplace_error_map.mean() + error_map.mean()))
+            )
+            l2_remain_num = min(l2_remain_num, l2_remain_index.shape[0])
+            lap_remain_num = remain_num - l2_remain_num
+            all_selected_index = torch.cat(
+                [
+                    lap_remain_index[-lap_remain_num:],
+                    l2_remain_index[-l2_remain_num:],
+                    selected_index,
+                ]
+            )
+            all_remain_index = sorted_map_index[
+                ~torch.isin(sorted_map_index, all_selected_index)
+            ]
+            select_sorted_index = torch.cat([all_remain_index, all_selected_index])
+            self.book["sorted_map_index"] = select_sorted_index
+
+    def _evos_cross_frequency_loss(self, cur_loss, pred):
+        if self.args.lap_coff > 0:
+            r_img = self.reconstruct_img(pred)
+            lap_loss = F.mse_loss(
+                compute_laplacian(r_img).squeeze(), self.cached_gt_lap
+            )
+            cur_loss += self.args.lap_coff * lap_loss
+        return cur_loss
+    
+    
 
 class ImageSamplingTrainer(ImageTrainer, Sampler):
     def __init__(self, args):
