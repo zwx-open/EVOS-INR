@@ -413,7 +413,7 @@ class ImageSamplingTrainer(ImageTrainer, Sampler):
             optimizer, lambda iter: 0.1 ** min(iter / num_epochs, 1)
         )
 
-        if self.args.lap_coff > 0:
+        if self.args.lap_coff > 0 or self.args.crossover_method != "no":
             self.cached_gt_lap = compute_laplacian(self.input_img).squeeze()
 
         self._init_sampler()

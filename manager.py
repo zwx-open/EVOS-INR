@@ -117,7 +117,7 @@ class ParamManager(object):
 
     def _set_exp_001(self, _exp):
         use_ratio = 0.5
-        self._tag = f"001_table1_constant_{use_ratio}"
+        self._tag = f"001_val_table1_constant_{use_ratio}"
         self._exp = f"{_exp}"
 
         self.p.log_epoch = 500 
