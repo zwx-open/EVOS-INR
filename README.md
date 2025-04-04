@@ -1,6 +1,6 @@
 # EVOS: Efficient Implicit Neural Training via EVOlutionary Selector
 
-### [Project Page](https://weixiang-zhang.github.io/proj-evos/) | [Paper](https://arxiv.org/pdf/2412.10153) | [Code](https://github.com/zwx-open/EVOS-INR) | [Supplementary](https://weixiang-zhang.github.io/proj-evos/static/pdfs/03247_supp.pdf) | [Checkpoints]()
+### [Project Page](https://weixiang-zhang.github.io/proj-evos/) | [Paper](https://arxiv.org/pdf/2412.10153) | [Code](https://github.com/zwx-open/EVOS-INR) | [Supplementary](https://weixiang-zhang.github.io/proj-evos/static/pdfs/03247_supp.pdf) | [Checkpoints](https://drive.google.com/drive/folders/199K-s6yGboMCpmYl7zmJ94c4FEGT0KiM?usp=sharing)
 
 [Weixiang Zhang](https://weixiang-zhang.github.io/),
 [Shuzhao Xie](https://shuzhaoxie.github.io/),
@@ -137,7 +137,7 @@ if __name__ == "__main__":
 
 # Checkpoints
 
-Chekckpoints can be found in [here](https://drive.google.com/drive/folders/1VMtc84T4UsgoAluNKtOg-qoJXb1Z27q0?usp=drive_link). 
+Chekckpoints can be found in [here](https://drive.google.com/drive/folders/199K-s6yGboMCpmYl7zmJ94c4FEGT0KiM?usp=sharing). 
 We thank @WillYao-THU for providing reproduced results and checkpoints in his environment.
 
 # Acknowledgments
