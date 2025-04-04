@@ -31,7 +31,7 @@ class Sampler(object):
         self.book = {}
 
     def _init_sampler(self):
-
+        
         if self.args.strategy == "nmt":
             self._nmt_init()
 
@@ -43,6 +43,9 @@ class Sampler(object):
 
         elif self.args.strategy == "egra":
             self._egra_init()
+        
+        if self.args.lap_coff > 0 or self.args.crossover_method != "no":
+            self.cached_gt_lap = compute_laplacian(self.input_img).squeeze()
 
     def _nmt_init(self):
         self.nmt = NMT(
@@ -113,18 +116,15 @@ class Sampler(object):
 
         _st = self.args.strategy
 
-        if epoch <= self.args.warm_up:
-            return coords, gt
-
         if _st == "full":
             return coords, gt
 
         elif _st == "random":
             _ratio_len = int(self.sample_num * self.cur_use_ratio)
             indices = torch.randperm(self.sample_num, device=self.device)[:_ratio_len]
-            random_coords = self.full_coords[indices]
-            random_gt = self.full_gt[indices]
-            return random_coords, random_gt
+            _coords = self.full_coords[indices]
+            _gt = self.full_gt[indices]
+            return _coords, _gt
 
         elif _st == "freeze":
             if self._is_profile_freeze(epoch):
@@ -136,11 +136,11 @@ class Sampler(object):
                 return _coords, _gt
 
         elif _st == "nmt":
-            sampled_coords, sampled_gt, _, indices = self.nmt.sample(
+            _coords, _gt, _, indices = self.nmt.sample(
                 epoch - 1, coords, gt
             )
             # record indices
-            return sampled_coords, sampled_gt
+            return _coords, _gt
 
         elif _st == "soft":
             net_grad = self.book.get("soft_net_grad", None)
@@ -164,22 +164,23 @@ class Sampler(object):
 
             self.book["soft_points_2d"] = points_2d
 
-            return _coords, _gt
 
         elif _st == "expansive":
             indices = self.es.select_sample(use_ratio=self.cur_use_ratio)
             _coords = self.full_coords[indices]
             _gt = self.full_gt[indices]
-            return _coords, _gt
 
         elif _st == "egra":
             indices = self.egra.sample(use_ratio=self.cur_use_ratio)
             _coords = self.full_coords[indices]
             _gt = self.full_gt[indices]
 
-            return _coords, _gt
+        else:
+            raise NotImplementedError
 
-        raise NotImplementedError
+        self._recover_rng()
+        return _coords, _gt
+
 
     def _get_mutation_ratio(self, epoch):
         if self.args.mutation_method == "constant":
@@ -244,7 +245,7 @@ class Sampler(object):
             _cur_interval = _start + ((_end - _start) / self.args.num_epochs) * epoch
             return int(_cur_interval)
 
-    def _update_freeze_info(self, pred, gt, epoch):
+    def _update_freeze_info(self, pred, gt, epoch): # crossover
         error_map = F.mse_loss(pred, gt, reduction="none").mean(1)
         if self.args.crossover_method == "add":
             r_img = self.reconstruct_img(pred)
@@ -322,22 +323,12 @@ class Sampler(object):
             select_sorted_index = torch.cat([all_remain_index, all_selected_index])
             self.book["sorted_map_index"] = select_sorted_index
 
-
-class ImageSamplingTrainer(ImageTrainer, Sampler):
-    def __init__(self, args):
-        ImageTrainer.__init__(self, args)
-        Sampler.__init__(self, args)
-
-    def _compute_sample_loss(self, pred, gt, epoch):
+    def _sampler_compute_loss(self, pred, gt, epoch):
         _st = self.args.strategy
         mse = self.compute_mse(pred, gt)
-        if _st == "full":
-            return self._compose_loss(mse, pred, gt, epoch)
-        elif _st == "random":
-            return mse
-        elif _st == "freeze":
-            if self._is_profile_freeze(epoch) or epoch <= self.args.warm_up:
-                return self._compose_loss(mse, pred, gt, epoch)
+        if _st == "freeze":
+            if self._is_profile_freeze(epoch):
+                return self._cross_frequency_loss(mse, pred, gt, epoch)
             else:
                 if self.args.lap_coff <= 0 or epoch > self.args.use_laplace_epoch:
                     return mse
@@ -373,9 +364,7 @@ class ImageSamplingTrainer(ImageTrainer, Sampler):
 
                     return mse + self.args.lap_coff * lap_loss
 
-                # return mse  # 暂时先用这个
-                # recompute freeze | 目前先不管结构信息(我们的方法能用高阶loss做引导)
-                return _mse
+                
 
         elif _st == "soft":
             loss_per_pix = self.book["soft_loss_per_pix"]
@@ -386,7 +375,7 @@ class ImageSamplingTrainer(ImageTrainer, Sampler):
         else:
             return mse
 
-    def _compose_loss(self, cur_loss, pred, gt, epoch):
+    def _cross_frequency_loss(self, cur_loss, pred, gt, epoch):
         if self.args.lap_coff > 0:
             r_img = self.reconstruct_img(pred)
             lap_loss = F.mse_loss(
@@ -394,6 +383,12 @@ class ImageSamplingTrainer(ImageTrainer, Sampler):
             )
             cur_loss += self.args.lap_coff * lap_loss
         return cur_loss
+
+class ImageSamplingTrainer(ImageTrainer, Sampler):
+    def __init__(self, args):
+        ImageTrainer.__init__(self, args)
+        Sampler.__init__(self, args)
+
 
     def train(self):
         num_epochs = self.args.num_epochs
@@ -413,8 +408,6 @@ class ImageSamplingTrainer(ImageTrainer, Sampler):
             optimizer, lambda iter: 0.1 ** min(iter / num_epochs, 1)
         )
 
-        if self.args.lap_coff > 0 or self.args.crossover_method != "no":
-            self.cached_gt_lap = compute_laplacian(self.input_img).squeeze()
 
         self._init_sampler()
 
@@ -422,25 +415,20 @@ class ImageSamplingTrainer(ImageTrainer, Sampler):
             torch.cuda.synchronize()
             log.start_timer("train")
 
-            log.start_timer("sampler")
-
             coords, gt = self._get_sampled_coordinates_gt(epoch)
 
             if self.args.strategy == "soft" and not self.args.soft_raw:
                 coords.requires_grad = True
 
-            torch.cuda.synchronize()
-            log.pause_timer("sampler")
 
             self._recover_rng()
 
-            log.start_timer("inference")
+           
             pred = self.model(coords)
 
-            torch.cuda.synchronize()
-            log.pause_timer("inference")
+          
 
-            log.start_timer("sampler")
+            
             if self._is_profile_freeze(epoch):
                 log.start_timer("freeze_info")
                 self._update_freeze_info(pred, gt, epoch)
@@ -465,20 +453,12 @@ class ImageSamplingTrainer(ImageTrainer, Sampler):
 
                 self.book["soft_loss_per_pix"] = loss_per_pix
 
-            torch.cuda.synchronize()
-            log.pause_timer("sampler")
 
-            log.start_timer("compute_loss")
-            loss = self._compute_sample_loss(pred, gt, epoch)
+            
+            loss = self._sampler_compute_loss(pred, gt, epoch)
 
-            # test
-            # if self.args.strategy == "eci":
-            #     loss = self.eci.get_loss(pred, gt, epoch)
 
-            torch.cuda.synchronize()
-            log.pause_timer("compute_loss")
-
-            log.start_timer("backward")
+            
             optimizer.zero_grad()
             loss.backward()
 
@@ -504,8 +484,6 @@ class ImageSamplingTrainer(ImageTrainer, Sampler):
                     )
                     self.book["soft_net_grad"] = net_grad
 
-            torch.cuda.synchronize()
-            log.pause_timer("backward")
 
             torch.cuda.synchronize()
             log.pause_timer("train")
