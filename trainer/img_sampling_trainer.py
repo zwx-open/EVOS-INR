@@ -33,15 +33,19 @@ class Sampler(object):
     def _init_sampler(self):
         
         if self.args.strategy == "nmt":
+            # Nonparametric teaching of implicit neural representations
             self._nmt_init()
 
         elif self.args.strategy == "soft":
+            # Accelerating neural field training via soft mining.
             self._soft_init()
 
         elif self.args.strategy == "expansive":
+            # Expansive supervision for neural radiance field.
             self._es_init()
 
         elif self.args.strategy == "egra":
+            # Egra-nerf: Edge-guided ray allocation for neural radiance fields.
             self._egra_init()
         
         if self.args.lap_coff > 0 or self.args.crossover_method != "no":
@@ -144,7 +148,7 @@ class Sampler(object):
 
         elif _st == "soft":
             net_grad = self.book.get("soft_net_grad", None)
-            loss_per_pix = self.book.get("soft_loss_per_pix", None)
+            loss_per_pix = self.book.get("loss_per_pix", None)
 
             points_2d = self.lmc(net_grad, loss_per_pix)
             if self.args.soft_raw:
@@ -183,12 +187,10 @@ class Sampler(object):
         self._recover_rng()
         return _coords, _gt
 
-
     def _get_mutation_ratio(self, epoch):
         if self.args.mutation_method == "constant":
             return self.args.init_mutation_ratio * self.args.use_ratio
         elif self.args.mutation_method == "linear":
-            # 0.5 | 0.4 → 0.6
             _start = self.args.init_mutation_ratio
             _end = self.args.end_mutation_ratio  # max = 1
             ratio = _start + ((_end - _start) / self.args.num_epochs) * epoch
@@ -332,7 +334,7 @@ class Sampler(object):
             if self._is_profile_freeze(epoch):
 
                 self._update_freeze_info(pred, gt, epoch) # crossover
-                return self._cross_frequency_loss(mse, pred, gt, epoch)
+                return self._cross_frequency_loss(mse, pred)
             else:
                 if self.args.lap_coff <= 0 or epoch > self.args.use_laplace_epoch:
                     return mse
@@ -368,18 +370,33 @@ class Sampler(object):
 
                     return mse + self.args.lap_coff * lap_loss
 
-                
-
         elif _st == "soft":
-            loss_per_pix = self.book["soft_loss_per_pix"]
+            
+            loss_per_pix = F.mse_loss(pred, gt, reduction="none").mean(-1)
+            l1_map = torch.abs(pred - gt).mean(-1).detach()  # important_loss
+            correction = (
+                1.0
+                / torch.clip(l1_map, min=torch.finfo(torch.float16).eps).detach()
+            )
+            alpha = self.args.soft_mining_alpha
+            r = min((epoch / self.args.soft_mining_warmup), alpha)
+            correction.pow_(r)
+            correction.clamp_(min=0.2, max=correction.mean() + correction.std())
+
+            if not self.args.wo_correction_loss:
+                loss_per_pix.mul_(correction)
+
             loss = loss_per_pix.mean()
             if self.use_grad_scaler:
                 loss = self.grad_scaler.scale(loss)
+
+            self.book["correction"] = correction
+            self.book["loss_per_pix"] = loss_per_pix
             return loss
         else:
             return mse
 
-    def _cross_frequency_loss(self, cur_loss, pred, gt, epoch):
+    def _cross_frequency_loss(self, cur_loss, pred):
         if self.args.lap_coff > 0:
             r_img = self.reconstruct_img(pred)
             lap_loss = F.mse_loss(
@@ -387,6 +404,26 @@ class Sampler(object):
             )
             cur_loss += self.args.lap_coff * lap_loss
         return cur_loss
+
+    def _sampler_after_backward(self, coords):
+        # Only Soft Mining Requires This Operation: To Get Grad
+        if self.args.strategy == "soft":
+            correction = self.book["correction"] 
+            loss_per_pix = self.book["loss_per_pix"] 
+            with torch.no_grad():
+                if self.args.soft_raw:
+                    # cannot learn anymore:
+                    net_grad = self.book["soft_points_2d"].grad.detach()
+                else:
+                    # update
+                    net_grad = coords.grad.detach()
+                scale_ = self.grad_scaler._scale if self.use_grad_scaler else 1
+                net_grad = net_grad / (
+                    (scale_ * correction * loss_per_pix).unsqueeze(1)
+                    + torch.finfo(net_grad.dtype).eps
+                )
+                self.book["soft_net_grad"] = net_grad
+
 
 class ImageSamplingTrainer(ImageTrainer, Sampler):
     def __init__(self, args):
@@ -418,60 +455,18 @@ class ImageSamplingTrainer(ImageTrainer, Sampler):
             torch.cuda.synchronize()
             log.start_timer("train")
 
-            coords, gt = self._sampler_get_coords_gt(epoch)
-
-           
+            coords, gt = self._sampler_get_coords_gt(epoch)           
             pred = self.model(coords)
-
-
-            # soft mining logics
-            ###############################################################################################
-            if self.args.strategy == "soft":
-                loss_per_pix = F.mse_loss(pred, gt, reduction="none").mean(-1)
-                l1_map = torch.abs(pred - gt).mean(-1).detach()  # important_loss
-                correction = (
-                    1.0
-                    / torch.clip(l1_map, min=torch.finfo(torch.float16).eps).detach()
-                )
-                alpha = self.args.soft_mining_alpha
-                r = min((epoch / self.args.soft_mining_warmup), alpha)
-                correction.pow_(r)
-                correction.clamp_(min=0.2, max=correction.mean() + correction.std())
-
-                if not self.args.wo_correction_loss:
-                    loss_per_pix.mul_(correction)
-
-                self.book["soft_loss_per_pix"] = loss_per_pix
-            ###############################################################################################
-
-            
             loss = self._sampler_compute_loss(pred, gt, epoch)
-            
+
             optimizer.zero_grad()
             loss.backward()
 
             optimizer.step()
             if self.args.use_lr_scheduler:
                 scheduler.step()
-
-            # Get Grad → sampler
-            if self.args.strategy == "soft":
-                with torch.no_grad():
-
-                    if self.args.soft_raw:
-                        # cannot learn anymore:
-                        net_grad = self.book["soft_points_2d"].grad.detach()
-                    else:
-                        # update
-                        net_grad = coords.grad.detach()
-
-                    scale_ = self.grad_scaler._scale if self.use_grad_scaler else 1
-                    net_grad = net_grad / (
-                        (scale_ * correction * loss_per_pix).unsqueeze(1)
-                        + torch.finfo(net_grad.dtype).eps
-                    )
-                    self.book["soft_net_grad"] = net_grad
-
+            
+            self._sampler_after_backward(coords)
 
             torch.cuda.synchronize()
             log.pause_timer("train")
@@ -500,10 +495,6 @@ class ImageSamplingTrainer(ImageTrainer, Sampler):
                 log.inst.info(f"Epoch {epoch}: SSIM: {ssim}")
                 log.inst.info(f"Epoch {epoch}: LPIPS: {lpips}")
 
-                if self.args.strategy == "nmt":
-                    log.inst.info(f"nmt_ratio_{self.nmt.get_ratio()}")
-                    log.inst.info(f"nmt_interval_{self.nmt.get_interval()}")
-
             if epoch % self.args.snap_epoch == 0:
                 _, final_img = self.inference()
                 io.save_cv2(
@@ -513,7 +504,6 @@ class ImageSamplingTrainer(ImageTrainer, Sampler):
                     ),
                 )
 
-            self.book["pred"] = pred
             writer.inst.add_scalar(
                 f"{self.data_name}/train/total_loss",
                 loss.detach().item(),
