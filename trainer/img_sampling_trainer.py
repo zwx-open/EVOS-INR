@@ -108,7 +108,7 @@ class Sampler(object):
             epoch, self.args.num_epochs, self.args.use_ratio
         )
 
-    def _get_sampled_coordinates_gt(self, epoch):
+    def _sampler_get_coords_gt(self, epoch):
         coords, gt = self.full_coords, self.full_gt
         self.cur_use_ratio = self._get_cur_use_ratio(epoch)
 
@@ -164,6 +164,8 @@ class Sampler(object):
 
             self.book["soft_points_2d"] = points_2d
 
+            if not self.args.soft_raw:
+                _coords.requires_grad = True
 
         elif _st == "expansive":
             indices = self.es.select_sample(use_ratio=self.cur_use_ratio)
@@ -328,6 +330,8 @@ class Sampler(object):
         mse = self.compute_mse(pred, gt)
         if _st == "freeze":
             if self._is_profile_freeze(epoch):
+
+                self._update_freeze_info(pred, gt, epoch) # crossover
                 return self._cross_frequency_loss(mse, pred, gt, epoch)
             else:
                 if self.args.lap_coff <= 0 or epoch > self.args.use_laplace_epoch:
@@ -408,34 +412,20 @@ class ImageSamplingTrainer(ImageTrainer, Sampler):
             optimizer, lambda iter: 0.1 ** min(iter / num_epochs, 1)
         )
 
-
         self._init_sampler()
 
         for epoch in trange(1, num_epochs + 1):
             torch.cuda.synchronize()
             log.start_timer("train")
 
-            coords, gt = self._get_sampled_coordinates_gt(epoch)
-
-            if self.args.strategy == "soft" and not self.args.soft_raw:
-                coords.requires_grad = True
-
-
-            self._recover_rng()
+            coords, gt = self._sampler_get_coords_gt(epoch)
 
            
             pred = self.model(coords)
 
-          
-
-            
-            if self._is_profile_freeze(epoch):
-                log.start_timer("freeze_info")
-                self._update_freeze_info(pred, gt, epoch)
-                torch.cuda.synchronize()
-                log.pause_timer("freeze_info")
 
             # soft mining logics
+            ###############################################################################################
             if self.args.strategy == "soft":
                 loss_per_pix = F.mse_loss(pred, gt, reduction="none").mean(-1)
                 l1_map = torch.abs(pred - gt).mean(-1).detach()  # important_loss
@@ -452,12 +442,10 @@ class ImageSamplingTrainer(ImageTrainer, Sampler):
                     loss_per_pix.mul_(correction)
 
                 self.book["soft_loss_per_pix"] = loss_per_pix
-
+            ###############################################################################################
 
             
             loss = self._sampler_compute_loss(pred, gt, epoch)
-
-
             
             optimizer.zero_grad()
             loss.backward()
