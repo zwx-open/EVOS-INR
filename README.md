@@ -1,4 +1,4 @@
-# EVOS: Efficient Implicit Neural Training via EVOlutionary Selector
+# [CVPR'2025] EVOS: Efficient Implicit Neural Training via EVOlutionary Selector
 
 ### [Project Page](https://weixiang-zhang.github.io/proj-evos/) | [Paper](https://arxiv.org/pdf/2412.10153) | [Code](https://github.com/zwx-open/EVOS-INR) | [Supplementary](https://weixiang-zhang.github.io/proj-evos/static/pdfs/03247_supp.pdf) | [Checkpoints](https://drive.google.com/drive/folders/199K-s6yGboMCpmYl7zmJ94c4FEGT0KiM?usp=sharing)
 
