@@ -106,8 +106,8 @@ class ParamManager(object):
         self.p.num_epochs = 5000
         self.p.use_ratio = use_ratio
 
-        self._use_single_data("00")
-        # self._use_datasets()
+        # self._use_single_data("00")
+        self._use_datasets()
 
         self._by_sampler(_exp)
     
@@ -118,8 +118,8 @@ class ParamManager(object):
         self.p.sample_num_schedular = "step" 
         self._tag = f"002_table1_stepwise_{use_ratio}"
         
-        self._use_single_data("00")
-        # self._use_datasets()
+        # self._use_single_data("00")
+        self._use_datasets()
 
     def _by_sampler(self, _exp,):
         if _exp == "full":

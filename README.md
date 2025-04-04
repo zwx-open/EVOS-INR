@@ -1,6 +1,6 @@
 # EVOS: Efficient Implicit Neural Training via EVOlutionary Selector
 
-### [Project Page](https://weixiang-zhang.github.io/proj-evos/) | [Paper](https://arxiv.org/pdf/2412.10153) | [Code](https://github.com/zwx-open/EVOS-INR) | [Supplementary](https://weixiang-zhang.github.io/proj-evos/static/pdfs/03247_supp.pdf)
+### [Project Page](https://weixiang-zhang.github.io/proj-evos/) | [Paper](https://arxiv.org/pdf/2412.10153) | [Code](https://github.com/zwx-open/EVOS-INR) | [Supplementary](https://weixiang-zhang.github.io/proj-evos/static/pdfs/03247_supp.pdf) | [Checkpoints]()
 
 [Weixiang Zhang](https://weixiang-zhang.github.io/),
 [Shuzhao Xie](https://shuzhaoxie.github.io/),
@@ -30,125 +30,132 @@ git clone https://github.com/zwx-open/EVOS-INR
 cd EVOS-INR
 ```
 ## Enviroment Setup
-todo;
-
 > **Tested Enviroments**: 
 </br> - Ubuntu 20.04 with PyTorch 1.12.1 & CUDA 11.3.1 on RTX 3090
 
 ## Run Demo
-> Demo: Fit `DIV2K/test/00.png` with SIREN + Sym-power-trans (5k epochs; ~5minutes)
+> Demo: Fit `DIV2K/test/00.png` with SIREN + EVOS(step-wise scheduler) (5k epochs; ~5minutes)
 ```shell
-python run.py 
+python demo.py 
 ```
 
 
-# High Level Structure
 
-# Code Execution
-## How to run experiments in this repo? 
-Please update code in `run.py` (~line 62) to run different experiments:
-The defualt is running demo (exp_000):
-```py
+# Reproducing Results from the Paper
+
+## Table 1. Comparison of sampling strategies under fixed iterations.
+<p align="center">
+  <img src="./assets/table_1.png" style="width:90%;">
+</p>
+
+To reproduce the results presented in Table 1, uncomment the corresponding code section in `run.py` (approximately `line 41`). All baseline configurations have been pre-configured for replication purposes.
+```python
 if __name__ == "__main__":
+   
+    '''Reproduce Table_1 (Constant Scheduler)'''
+    # param_idxs = [
+    #     "full",
+    #     "random",
+    #     "egra",
+    #     "expansive",
+    #     "soft",
+    #     "nmt_incre", 
+    #     # "nmt_dense",
+    #     "evos",
+    #     "evos_wo_cfs"
+    # ]
+    # gpu_list = [0,1,2,3,4,5,6,7]
+    # run_tasks("001", param_idxs, gpu_list)
 
-    exp = "000"
-    param_sets = PAMRAM_SET[exp]
-    gpu_list = [i for i in range(len(param_sets))]
-    
-    run_tasks(exp, param_sets, gpu_list)
+    '''Reproduce Table_1 (Step-wise Scheduler)'''
+    param_idxs = [
+        "random",
+        "egra",
+        "expansive",
+        "nmt_incre", 
+        "evos",
+        "evos_wo_cfs",
+    ]
+    gpu_list = [0,1,2,3,4,5,6,7]
+    run_tasks("002", param_idxs, gpu_list)
 ```
-For example, if you want to run experment 001, you can update it with `exp = "001"`. Moreover, feel free to allocate tasks for different gpu:
-```py
-if __name__ == "__main__":
-
-    exp = "001"
-    param_sets = PAMRAM_SET[exp]
-    gpu_list = [3, 0] # assert len(param_sets) == len(gpu_list)
-    
-    run_tasks(exp, param_sets, gpu_list)
+```shell
+python run.py
 ```
-## How to set different tasks \& paramters?
-For example, if you want to run *sym_power* and *01_norm* in `exp_001`, please update `config.py` with:
-
+If only a single GPU is available, the experiments can be conducted sequentially by:
 ```python
-PAMRAM_SET["001"] = (
-            "01_norm",
-            # "z_score",
-
-            #"gamma_0.5",
-            #"gamma_2.0",
-
-            # "scale_0.5",
-            # "scale_1.0",
-            # "scale_2.0",
-
-            # "inverse",
-            # "rpp"
-            # "box_cox",
-            
-            "sym_power",          
-        )
+    param_idxs = [
+        "random",
+        "egra",
+        "expansive",
+        "nmt_incre", 
+        "evos",
+        "evos_wo_cfs",
+    ]
+    gpu_list = [0]
+    run_tasks("002", param_idxs, gpu_list)
 ```
-## How to register new task?
-Feel free to register new experiment by adding new key in `config.py`:
-```python
-PAMRAM_SET["999"] = (
-            "xxx1",
-            "xxx2",        
-        )
-```
-and define corresponding function in `manager.py`:
-```python
-def _set_exp_999(self, param_set):
-    if param_set == "xxx1":
-        self.p.xxx = xxx1
-    elif param_set == "xxx2":
-        self.p.xxx = xxx2
-```
+The baseline configurations are implemented in `_by_sampler()` within `manager.py`, which can be customized to suit specific experimental needs.
 
 ## More Flexible Way
-If you prefer a more flexible way to run this code, please refer to `debug.py`:
-```py
-'''flexiblely set all arugments in opt.py'''
-def debug(use_cuda=0):
+If you prefer a more flexible way to run this code, please refer to `demo.py`:
+```python
+def demo(use_cuda=0):
     args = [
         "--model_type",
         "siren",
         "--input_path",
         "./data/div2k/test_data/00.png",
         "--eval_lpips",
-        "--transform",
-        "sym_power",
+        "--log_epoch",
+        "500",
+        "--num_epochs",
+        "5000",
+        "--use_ratio",
+        "0.2",
+        "--strategy",
+        "evos",
+        "--sample_num_schedular",
+        "step",
         "--tag",
-        "debug_demo",
+        "evos",
         "--lr",
         "0.0001",
         "--up_folder_name",
-        "000_demo", 
+        "000_demo_evos_stepwith",
     ]
     os.environ["CUDA_VISIBLE_DEVICES"] = str(use_cuda) 
     script = "python main.py " + " ".join(args)
     print(f"Running: {script}")
     os.system(script)
+
+
+if __name__ == "__main__":
+    demo(0)
 ```
 
-Then running `debug.py`:
-```python
-python debug.py
-```
 
-# Reproducing Results from the Paper
+# Checkpoints
 
-## Comparison of Different Transformations (Table 1)
-<p align="center">
-  <img src="./assets/table_1.png" style="width:90%;">
-</p>
+Chekckpoints can be found in [here](https://drive.google.com/drive/folders/1VMtc84T4UsgoAluNKtOg-qoJXb1Z27q0?usp=drive_link). 
+We thank @WillYao-THU for providing reproduced results and checkpoints in his environment.
 
-The setting of this experiments is correspoinding to `_set_exp_001()` in `manager.py`. Please run `exp_001` following [How to run experiments in this repo](#How-to-run-experiments-in-this-repo?).
+# Acknowledgments
+We thank the authors of the following works for releasing their codebases:
+- [INT](https://github.com/chen2hang/INT_NonparametricTeaching)
+- [Soft Mining](https://github.com/ubc-vision/nf-soft-mining)
 
-Chekckpoints can be found in [here](https://drive.google.com/drive/folders/1VMtc84T4UsgoAluNKtOg-qoJXb1Z27q0?usp=drive_link) (`log/001_trans`).
-
-
+# Additional Related Research
+Welcome to explore our related research. The source code for all works has been available.
+- (*AAAI'2025*) Enhancing Implicit Neural Representations via Symmetric Power Transformation | 
+[[paper]](https://arxiv.org/abs/2412.09213)
+[[project]](https://weixiang-zhang.github.io/proj-symtrans/)
+[[code]](https://github.com/zwx-open/Symmetric-Power-Transformation-INR)
+- (*ICME'2025*) Expansive Supervision for Neural Radiance Fields| 
+[[paper]](https://arxiv.org/pdf/2412.10153)
+[[code]](https://github.com/zwx-open/Expansive-Supervision)
+- Recent Progress of Implicit Neural Representations | 
+[[code]](https://github.com/zwx-open/Recent-Progress-of-INR)
 
 # Citation
 Please consider leaving a ⭐ and citing our paper if you find this project helpful:

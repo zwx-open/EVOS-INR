@@ -1,7 +1,6 @@
 from components.nmt import NMT
 from components.nmt import mt_scheduler_factory
 from components.lmc import LMC
-from components.evos import EVOS
 
 import numpy as np
 import torch

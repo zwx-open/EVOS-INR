@@ -40,14 +40,14 @@ def run_tasks(exp_num, param_idxs, gpu_list):
 
 if __name__ == "__main__":
    
-    '''Replicate for Table_1 (Constant Scheduler)'''
+    '''Reproduce Table_1 (Constant Scheduler)'''
     # param_idxs = [
-    #     # "full",
-    #     # "random",
-    #     # "egra",
-    #     # "expansive",
+    #     "full",
+    #     "random",
+    #     "egra",
+    #     "expansive",
     #     "soft",
-    #     # "nmt_incre", 
+    #     "nmt_incre", 
     #     # "nmt_dense",
     #     "evos",
     #     "evos_wo_cfs"
@@ -55,7 +55,7 @@ if __name__ == "__main__":
     # gpu_list = [0,1,2,3,4,5,6,7]
     # run_tasks("001", param_idxs, gpu_list)
 
-    '''Replicate for Table_1 (Step-wise Scheduler)'''
+    '''Reproduce Table_1 (Step-wise Scheduler)'''
     param_idxs = [
         "random",
         "egra",
