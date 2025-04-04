@@ -131,7 +131,7 @@ class Sampler(object):
             return _coords, _gt
 
         elif _st == "freeze":
-            if self._is_profile_freeze(epoch):
+            if self._should_fitness_eval(epoch):
                 return coords, gt
             else:
                 selection_mask = self._get_selection_mask(epoch)
@@ -143,7 +143,6 @@ class Sampler(object):
             _coords, _gt, _, indices = self.nmt.sample(
                 epoch - 1, coords, gt
             )
-            # record indices
             return _coords, _gt
 
         elif _st == "soft":
@@ -212,7 +211,7 @@ class Sampler(object):
         sorted_map_index = self.book["sorted_map_index"]
         first_select_indices = sorted_map_index[-first_select_num:]
 
-        # mutation
+        # Augmented Unbiased Mutation
         mutation_num = int(mutation_ratio * self.sample_num)
         remain_indices = sorted_map_index[:-first_select_num]
         sample_index = torch.randperm(remain_indices.shape[0], device=self.device)[
@@ -232,10 +231,7 @@ class Sampler(object):
         selection_mask[selected_indices] = True
         return selection_mask
 
-    def _is_profile_freeze(self, epoch):
-        if self.args.strategy != "freeze":
-            return False
-
+    def _should_fitness_eval(self, epoch):
         _cur_interval = self._get_cur_interval(epoch)
         return epoch % _cur_interval == 1
 
@@ -243,17 +239,15 @@ class Sampler(object):
         if self.args.profile_interval_method == "fixed":
             return self.args.init_interval
         elif self.args.profile_interval_method == "lin_dec":
-            _cur_ratio = self.cur_use_ratio
             _start = self.args.init_interval
             _end = self.args.end_interval
             _cur_interval = _start + ((_end - _start) / self.args.num_epochs) * epoch
             return int(_cur_interval)
 
-    def _update_freeze_info(self, pred, gt, epoch): # crossover
+    def _frequency_aware_crossover(self, pred, gt, epoch): # crossover
         error_map = F.mse_loss(pred, gt, reduction="none").mean(1)
         if self.args.crossover_method == "add":
             r_img = self.reconstruct_img(pred)
-            # laplace_map = compute_laplacian(r_img, self.input_img).squeeze()
             laplace_map = F.mse_loss(
                 compute_laplacian(r_img).squeeze(), self.cached_gt_lap, reduction="none"
             )
@@ -262,11 +256,10 @@ class Sampler(object):
         elif self.args.crossover_method == "no":
             pass
 
-        ### 直接用value还是一阶diff做guidance
         if self.args.profile_guide == "value":
             sorted_map_index = torch.argsort(error_map.flatten())
-        # deprecated
         elif self.args.profile_guide == "diff_1":
+            # to deprecated ...
             last_error_map = self.book.get("error_map", None)
             if last_error_map is None:
                 last_error_map = torch.zeros_like(error_map)
@@ -279,10 +272,8 @@ class Sampler(object):
         self.book["error_map"] = error_map.detach()
         self.book["sorted_map_index"] = sorted_map_index
 
-        # 按照当前频率分量的比值选择是否crossover
         if self.args.crossover_method == "select":
             r_img = self.reconstruct_img(pred)
-            # laplace_map = compute_laplacian(r_img, self.input_img).squeeze()
             laplace_map = F.mse_loss(
                 compute_laplacian(r_img).squeeze(), self.cached_gt_lap, reduction="none"
             )
@@ -327,36 +318,36 @@ class Sampler(object):
             select_sorted_index = torch.cat([all_remain_index, all_selected_index])
             self.book["sorted_map_index"] = select_sorted_index
 
+    def _cross_frequency_loss(self, cur_loss, pred):
+        if self.args.lap_coff > 0:
+            r_img = self.reconstruct_img(pred)
+            lap_loss = F.mse_loss(
+                compute_laplacian(r_img).squeeze(), self.cached_gt_lap
+            )
+            cur_loss += self.args.lap_coff * lap_loss
+        return cur_loss
+    
     def _sampler_compute_loss(self, pred, gt, epoch):
         _st = self.args.strategy
         mse = self.compute_mse(pred, gt)
         if _st == "freeze":
-            if self._is_profile_freeze(epoch):
+            if self._should_fitness_eval(epoch):
 
-                self._update_freeze_info(pred, gt, epoch) # crossover
+                self._frequency_aware_crossover(pred, gt, epoch) # crossover
                 return self._cross_frequency_loss(mse, pred)
             else:
                 if self.args.lap_coff <= 0 or epoch > self.args.use_laplace_epoch:
                     return mse
                 else:
-                    # log.start_timer("lap_0")
                     profile_pred = self.book["freeze_profile_pred"]
                     _mask = self.book["freeze_mask"]
                     pseudo_full_pred = profile_pred.clone()
-                    # torch.cuda.synchronize()
-                    # log.pause_timer("lap_0")
 
-                    # log.start_timer("lap_1")
                     indices = torch.arange(_mask.shape[0], device=pred.device)[~_mask]
                     pseudo_full_pred[indices] = pred
-                    # torch.cuda.synchronize()
-                    # log.pause_timer("lap_1")
 
-                    # log.start_timer("lap_2")
                     r_img = self.reconstruct_img(pseudo_full_pred)
                     lap_loss = (
-                        # compute_laplacian(r_img, self.input_img)
-                        # .squeeze()
                         F.mse_loss(
                             compute_laplacian(r_img).squeeze(),
                             self.cached_gt_lap,
@@ -365,9 +356,7 @@ class Sampler(object):
                         .flatten()[~_mask]
                         .mean()
                     )
-                    # torch.cuda.synchronize()
-                    # log.pause_timer("lap_2")
-
+                    
                     return mse + self.args.lap_coff * lap_loss
 
         elif _st == "soft":
@@ -395,15 +384,6 @@ class Sampler(object):
             return loss
         else:
             return mse
-
-    def _cross_frequency_loss(self, cur_loss, pred):
-        if self.args.lap_coff > 0:
-            r_img = self.reconstruct_img(pred)
-            lap_loss = F.mse_loss(
-                compute_laplacian(r_img).squeeze(), self.cached_gt_lap
-            )
-            cur_loss += self.args.lap_coff * lap_loss
-        return cur_loss
 
     def _sampler_after_backward(self, coords):
         # Only Soft Mining Requires This Operation: To Get Grad

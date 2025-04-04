@@ -43,12 +43,12 @@ if __name__ == "__main__":
     '''Replicate for Table_1 (Constant Scheduler)'''
     param_idxs = [
         # "full",
-        "random",
-        "egra",
-        "expansive",
+        # "random",
+        # "egra",
+        # "expansive",
         "soft",
-        "nmt_incre", 
-        "nmt_dense",
+        # "nmt_incre", 
+        # "nmt_dense",
         "fm_cur2",
         "fm_cur2_wo_crossover_laploss",
     ]
