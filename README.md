@@ -48,7 +48,8 @@ python demo.py
   <img src="./assets/table_1.png" style="width:90%;">
 </p>
 
-To reproduce the results presented in Table 1, uncomment the corresponding code section in `run.py` (approximately `line 41`). All baseline configurations have been pre-configured for replication purposes.
+To reproduce the results presented in Table 1, uncomment the corresponding code section in `run.py` (approximately `line 41`). 
+All baseline have been pre-configured for replication purposes.
 ```python
 if __name__ == "__main__":
    
